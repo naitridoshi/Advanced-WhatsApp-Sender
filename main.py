@@ -8,6 +8,7 @@ import requests
 import time
 import json
 import platform
+import signal
 from PyQt5.QtGui import QBrush, QTextCursor, QColor, QRegExpValidator, QIcon, QPixmap, QFontDatabase, QFont
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QPoint, QRegExp, QAbstractTableModel
 from PyQt5.QtSql import QSqlDatabase, QSqlQueryModel, QSqlQuery
@@ -26,11 +27,18 @@ class Main():
     def __init__(self):
         super(Main, self).__init__()
         app = QApplication(sys.argv)
+        
+        # Set up signal handlers for graceful shutdown
+        signal.signal(signal.SIGINT, self.signal_handler)
+        signal.signal(signal.SIGTERM, self.signal_handler)
+        
         self.__LICENS__ = True
         self.__VERSION__ = '1.0'
         self.cv = 0
         self.Net = None
         self.User = True
+        # Configuration: True = send image with caption, False = send both separately
+        self.SEND_IMAGE_WITH_CAPTION = True
         log.info(fr"===== Program Runing {self.__VERSION__} =====")
         self.insert = NetWork(version=self.__VERSION__)
         self.insert.start()
@@ -40,6 +48,10 @@ class Main():
         self.MainWindow = myQMainWindow()
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self.MainWindow)
+        
+        # Connect the cleanup method to window close event
+        self.MainWindow.closeEvent = self.window_close_event
+        
         self.enable_copy_paste_for_all_widgets(self.MainWindow)
         # Enable context menu and clipboard actions for the main message input
         self.ui.textMSG.setContextMenuPolicy(Qt.DefaultContextMenu)
@@ -612,6 +624,10 @@ class Main():
         try:
             if db.open():
                 # QApplication.processEvents()
+                log.debug(f"sendImg called with path: {path}, caption: {caption}")
+                log.debug(f"Path exists: {os.path.exists(path) if path else 'No path'}")
+                log.debug(f"Path is absolute: {os.path.isabs(path) if path else 'No path'}")
+
                 query = QSqlQuery()
                 query.exec_(fr"select * from `{TableNow}` where status = '' or res = '☑'")
                 numList = []
@@ -639,6 +655,75 @@ class Main():
                 self.ImgThread.nwa.connect(self.nwaINS)
                 self.ImgThread.EndWork.connect(self.EndWork)
                 self.stopProgress = False
+        except Exception as e:
+            if hasattr(e, 'message'):
+                log.exception(e.message)
+            else:
+                log.debug(e)
+            self.msgError(self.ln["img_err"][self.cln])
+
+    def sendBoth(self, text, path, caption=''):
+        """Send both text message and image with caption"""
+        try:
+            if db.open():
+                log.debug(f"sendBoth called with text: {text}, path: {path}, caption: {caption}")
+                log.debug(f"Path exists: {os.path.exists(path) if path else 'No path'}")
+                log.debug(f"Path is absolute: {os.path.isabs(path) if path else 'No path'}")
+                
+                query = QSqlQuery()
+                query.exec_(fr"select * from `{TableNow}` where status = '' or res = '☑'")
+                numList = []
+                while query.next():
+                    num = query.value(0)
+                    numList.append(num)
+                
+                # Use image sleep settings for consistency
+                sleepMin = self.ui.sleepMin_I.text()
+                sleepMax = self.ui.sleepMax_I.text()
+                if sleepMin != '':
+                    sleepMin = int(sleepMin)
+                else:
+                    sleepMin = 3
+                if sleepMax != '':
+                    sleepMax = int(sleepMax)
+                else:
+                    sleepMax = 6
+                
+                # First send the text message
+                log.debug("Starting with text message...")
+                self.MsgThread = Web(counter_start=0, step='M', numList=numList, sleepMin=sleepMin, sleepMax=sleepMax,
+                                     text=text, Remember=self.RememberLogin)
+                self.MsgThread.start()
+                self.MsgThread.lcdNumber_reviewed.connect(self.lcdNumber_reviewed)
+                self.MsgThread.lcdNumber_wa.connect(self.lcdNumber_wa)
+                self.MsgThread.lcdNumber_nwa.connect(self.lcdNumber_nwa)
+                self.MsgThread.LogBox.connect(self.programLog)
+                self.MsgThread.wa.connect(self.waINS)
+                self.MsgThread.nwa.connect(self.nwaINS)
+                self.MsgThread.EndWork.connect(lambda msg: self.sendImageAfterText(path, caption, numList, sleepMin, sleepMax))
+                self.stopProgress = False
+        except Exception as e:
+            if hasattr(e, 'message'):
+                log.exception(e.message)
+            else:
+                log.debug(e)
+            self.msgError(self.ln["msg_err"][self.cln])
+    
+    def sendImageAfterText(self, path, caption, numList, sleepMin, sleepMax):
+        """Send image after text message is completed"""
+        try:
+            log.debug("Text messages completed, now sending images...")
+            self.ImgThread = Web(counter_start=0, step='I', numList=numList, sleepMin=sleepMin, sleepMax=sleepMax,
+                                 text=caption, path=path, Remember=self.RememberLogin)
+            self.ImgThread.start()
+            self.ImgThread.lcdNumber_reviewed.connect(self.lcdNumber_reviewed)
+            self.ImgThread.lcdNumber_wa.connect(self.lcdNumber_wa)
+            self.ImgThread.lcdNumber_nwa.connect(self.lcdNumber_nwa)
+            self.ImgThread.LogBox.connect(self.programLog)
+            self.ImgThread.wa.connect(self.waINS)
+            self.ImgThread.nwa.connect(self.nwaINS)
+            self.ImgThread.EndWork.connect(self.EndWork)
+            self.stopProgress = False
         except Exception as e:
             if hasattr(e, 'message'):
                 log.exception(e.message)
@@ -695,6 +780,37 @@ class Main():
                 if Net:
                     if self.User:
                         currentIndex = self.ui.start_tab.currentIndex()
+                        log.debug(f"Current tab index: {currentIndex}")
+                        log.debug(f"Current tab name: {self.ui.start_tab.tabText(currentIndex)}")
+                        
+                        # Check if both text and image are available
+                        has_text = self.ui.textMSG.toPlainText().strip() != ''
+                        has_image = self.p != '' and os.path.exists(self.p)
+                        
+                        log.debug(f"Has text: {has_text}")
+                        log.debug(f"Has image: {has_image}")
+                        
+                        # If both text and image are available, choose based on configuration
+                        if has_image and has_text:
+                            if self.SEND_IMAGE_WITH_CAPTION:
+                                log.debug("Both text and image available - sending image with text as caption")
+                                self.ui.start_tab.setCurrentIndex(2)
+                                currentIndex = 2
+                                # Set the text as caption
+                                self.ui.caption.setPlainText(self.ui.textMSG.toPlainText())
+                                log.debug(f"Set text as caption: {self.ui.textMSG.toPlainText()}")
+                            else:
+                                log.debug("Both text and image available - sending both separately")
+                                self.btnStatus()
+                                self.ui.LogBox.appendPlainText(fr"-- Start Send Both (Text + Image) --")
+                                self.sendBoth(text=self.ui.textMSG.toPlainText(), path=self.p, caption=self.ui.caption.toPlainText())
+                                return  # Exit early since we're handling both
+                        # If image is selected but we're on text tab, switch to image tab
+                        elif has_image and currentIndex == 1:
+                            log.debug("Image selected but on text tab - switching to image tab")
+                            self.ui.start_tab.setCurrentIndex(2)
+                            currentIndex = 2
+                        
                         if currentIndex == 0:
                             self.btnStatus()
                             self.ui.LogBox.appendPlainText(fr"-- Start analysis --")
@@ -711,8 +827,68 @@ class Main():
                                 self.msgError(self.ln["inputxt_err"][self.cln])
                         elif currentIndex == 2:
                             log.debug('image tab')
+                            log.debug(f"Image path: {self.p}")
                             if self.p != '':
                                 caption = self.ui.caption.toPlainText()
+                                log.debug(f"Original caption: {caption[:100]}...")
+                                
+                                # Clean the caption text if it contains HTML or special characters
+                                if caption and ('<' in caption or '>' in caption or '&' in caption):
+                                    import re
+                                    import html
+                                    # Decode HTML entities
+                                    caption = html.unescape(caption)
+                                    
+                                    # Replace HTML line breaks with actual newlines
+                                    caption = caption.replace('<br>', '\n')
+                                    caption = caption.replace('<br/>', '\n')
+                                    caption = caption.replace('<br />', '\n')
+                                    
+                                    # Replace paragraph tags with double newlines to preserve spacing
+                                    caption = caption.replace('</p>', '\n\n')
+                                    caption = caption.replace('<p>', '')
+                                    
+                                    # Replace list items with proper formatting
+                                    caption = caption.replace('<li>', '• ')
+                                    caption = caption.replace('</li>', '\n')
+                                    caption = caption.replace('<ul>', '\n')
+                                    caption = caption.replace('</ul>', '\n')
+                                    caption = caption.replace('<ol>', '\n')
+                                    caption = caption.replace('</ol>', '\n')
+                                    
+                                    # Replace heading tags with proper formatting
+                                    caption = caption.replace('<h1>', '\n')
+                                    caption = caption.replace('</h1>', '\n')
+                                    caption = caption.replace('<h2>', '\n')
+                                    caption = caption.replace('</h2>', '\n')
+                                    caption = caption.replace('<h3>', '\n')
+                                    caption = caption.replace('</h3>', '\n')
+                                    caption = caption.replace('<h4>', '\n')
+                                    caption = caption.replace('</h4>', '\n')
+                                    caption = caption.replace('<h5>', '\n')
+                                    caption = caption.replace('</h5>', '\n')
+                                    caption = caption.replace('<h6>', '\n')
+                                    caption = caption.replace('</h6>', '\n')
+                                    
+                                    # Remove other HTML tags but preserve their content
+                                    caption = re.sub(r'<[^>]+>', '', caption)
+                                    
+                                    # Replace common HTML entities
+                                    caption = caption.replace('&nbsp;', ' ')
+                                    caption = caption.replace('&amp;', '&')
+                                    caption = caption.replace('&lt;', '<')
+                                    caption = caption.replace('&gt;', '>')
+                                    caption = caption.replace('&quot;', '"')
+                                    
+                                    # Clean up multiple consecutive newlines (keep max 2)
+                                    caption = re.sub(r'\n{3,}', '\n\n', caption)
+                                    
+                                    # Remove leading/trailing whitespace but preserve internal formatting
+                                    caption = caption.strip()
+                                    
+                                    log.debug(f"Cleaned caption length: {len(caption)} characters")
+                                    log.debug(f"Cleaned caption: {caption[:200]}...")
+                                
                                 self.ui.LogBox.appendPlainText(fr"-- Start Send Image --")
                                 self.sendImg(path=self.p, caption=caption)
                                 self.btnStatus()
@@ -954,6 +1130,15 @@ class Main():
         img_path, _ = QFileDialog.getOpenFileName(caption="", directory=UserDesk,
                                                   filter="Image Files (*.jpg | *.jpeg | *.png)", options=options)
         self.p = img_path
+        log.debug(f"Image selected: {img_path}")
+        log.debug(f"Image exists: {os.path.exists(img_path) if img_path else 'No image selected'}")
+        log.debug(f"Image is absolute: {os.path.isabs(img_path) if img_path else 'No image selected'}")
+        
+        # Automatically switch to Image tab when image is selected
+        if img_path:
+            self.ui.start_tab.setCurrentIndex(2)  # Switch to Image tab (index 2)
+            log.debug("Automatically switched to Image tab")
+        
         try:
             if img_path:
                 log.debug(img_path)
@@ -962,7 +1147,8 @@ class Main():
                 img1 = img.scaled(120, 120, Qt.KeepAspectRatio)
                 self.ui.imgShow.setPixmap(img1)
                 self.ui.imgName.setText(imgName)
-        except:
+        except Exception as e:
+            log.error(f"Error loading image preview: {e}")
             pass
 
     def enable_copy_paste_for_all_widgets(self, widget):
@@ -983,6 +1169,51 @@ class Main():
             log.debug("No internet connection available.", exc_info=True)
             return False
 
+    def signal_handler(self, signum, frame):
+        """Handle Ctrl+C and other termination signals"""
+        log.debug(f"Received signal {signum}. Exiting gracefully.")
+        try:
+            # Stop any running threads
+            self.stop_progress()
+            
+            # Close browser instances
+            if hasattr(self, 'AnalyzThread'):
+                self.AnalyzThread.stop()
+            if hasattr(self, 'MsgThread'):
+                self.MsgThread.stop()
+            if hasattr(self, 'ImgThread'):
+                self.ImgThread.stop()
+                
+            log.debug("Cleanup completed. Exiting.")
+        except Exception as e:
+            log.debug(f"Error during cleanup: {e}")
+        finally:
+            sys.exit(0)
+    
+    def cleanup(self):
+        """Cleanup method to be called when application exits"""
+        try:
+            log.debug("Performing cleanup...")
+            self.stop_progress()
+            
+            # Stop any running threads
+            if hasattr(self, 'AnalyzThread') and self.AnalyzThread.isRunning:
+                self.AnalyzThread.stop()
+            if hasattr(self, 'MsgThread') and self.MsgThread.isRunning:
+                self.MsgThread.stop()
+            if hasattr(self, 'ImgThread') and self.ImgThread.isRunning:
+                self.ImgThread.stop()
+                
+            log.debug("Cleanup completed.")
+        except Exception as e:
+            log.debug(f"Error during cleanup: {e}")
+
+    def window_close_event(self, event):
+        """Custom close event handler to ensure cleanup"""
+        log.debug("Main window close event triggered.")
+        self.cleanup()
+        event.accept()
+
 
 class myQMainWindow(QMainWindow):
     def __init__(self):
@@ -1002,6 +1233,19 @@ class myQMainWindow(QMainWindow):
         delta = QPoint(event.globalPos() - self.oldPos)
         self.move(self.x() + delta.x(), self.y() + delta.y())
         self.oldPos = event.globalPos()
+    
+    def keyPressEvent(self, event):
+        """Handle keyboard shortcuts"""
+        if event.key() == Qt.Key_C and event.modifiers() == Qt.ControlModifier:
+            # Ctrl+C pressed
+            log.debug("Ctrl+C pressed - stopping application")
+            self.close()
+        elif event.key() == Qt.Key_Q and event.modifiers() == Qt.ControlModifier:
+            # Ctrl+Q pressed
+            log.debug("Ctrl+Q pressed - quitting application")
+            self.close()
+        else:
+            super().keyPressEvent(event)
 
 
 class LoadingText(QMessageBox):
