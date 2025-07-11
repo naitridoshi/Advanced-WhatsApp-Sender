@@ -14,7 +14,10 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.service import Service
-from subprocess import CREATE_NO_WINDOW
+if platform.system().lower() == 'windows':
+    from subprocess import CREATE_NO_WINDOW
+else:
+    CREATE_NO_WINDOW = 0
 import chromedriver_autoinstaller
 from appLog import log
 
@@ -75,26 +78,38 @@ class Web(QThread):
         self.__init_browser()
 
     def driverBk(self):
+        """Initialize browser with proper user data directory for session persistence"""
         option = webdriver.ChromeOptions()
         option.add_argument("--disable-notifications")
-        # option.add_argument(fr"--user-data-dir={userDataPath}")
+        option.add_argument("--disable-blink-features=AutomationControlled")
+        option.add_experimental_option("excludeSwitches", ["enable-automation"])
+        option.add_experimental_option('useAutomationExtension', False)
+        
+        # Create a dedicated user data directory for this application
+        user_data_dir = os.path.join(os.getcwd(), 'temp', 'chrome_profile')
+        if not os.path.exists(user_data_dir):
+            os.makedirs(user_data_dir)
+        
+        option.add_argument(f"--user-data-dir={user_data_dir}")
+        
         try:
+            self.__driver = webdriver.Chrome(options=option, service=self.service)
+            log.debug("webDriver with user data directory")
+        except Exception as e:
+            log.exception(f"Chrome initialization error: {e}")
             try:
+                # Fallback without user data directory
+                option = webdriver.ChromeOptions()
+                option.add_argument("--disable-notifications")
                 self.__driver = webdriver.Chrome(options=option, service=self.service)
-                log.debug("webDriver")
+                log.debug("webDriver fallback")
             except:
-                log.exception("error remeber")
-                self.__driver = webdriver.Chrome(service=self.service)
-        except:
-            log.exception("Chrome ->:")
-            # if not os.path.exists('temp/F.Options'):
-            #     os.mkdir('temp/F.Options')
-            # optionsF = webdriver.FirefoxOptions()
-            # optionsF.add_argument('-headless')  ## hidden Browser
-            try:
-                self.__driver = webdriver.Firefox()
-            except:
-                pass
+                log.exception("Chrome fallback failed")
+                try:
+                    self.__driver = webdriver.Firefox()
+                except:
+                    pass
+        
         try:
             self.__driver.set_window_position(0, 0)
             self.__driver.set_window_size(1080, 840)
@@ -108,15 +123,32 @@ class Web(QThread):
         return status
 
     def copyToClipboard(self, text):
-        try:  # Copy Text To clipboard
-            try:
-                subprocess.run("pbcopy", universal_newlines=True, input=text)
-            except Exception:
-                pyperclip.copy(text)
-        except Exception:
-            subprocess.run("pbcopy", universal_newlines=True, input=text)
-        finally:
+        """Copy text to clipboard using platform-appropriate method"""
+        try:
+            # Try pyperclip first (works on most platforms)
             pyperclip.copy(text)
+            log.debug(f"Text copied to clipboard using pyperclip: {text}")
+        except Exception as e:
+            log.debug(f"pyperclip failed: {e}")
+            try:
+                # Try platform-specific commands
+                if platform.system().lower() == 'darwin':  # macOS
+                    subprocess.run(["pbcopy"], input=text, text=True, check=True)
+                elif platform.system().lower() == 'linux':  # Linux
+                    subprocess.run(["xclip", "-selection", "clipboard"], input=text, text=True, check=True)
+                elif platform.system().lower() == 'windows':  # Windows
+                    subprocess.run(["clip"], input=text, text=True, check=True)
+                else:
+                    # Fallback to pyperclip again
+                    pyperclip.copy(text)
+                log.debug(f"Text copied to clipboard using platform command: {text}")
+            except Exception as e2:
+                log.error(f"All clipboard methods failed: {e2}")
+                # Last resort: try pyperclip one more time
+                try:
+                    pyperclip.copy(text)
+                except:
+                    log.error("Failed to copy text to clipboard")
 
     def ANALYZ(self):
         try:
@@ -142,6 +174,25 @@ class Web(QThread):
                     log.debug("login")
                     logtxt = "Login Success"
                     self.LogBox.emit(logtxt)
+                    
+                    # Save session if remember is enabled and no cached session exists
+                    if self.remember:
+                        cacheList = os.listdir('temp/cache/')
+                        if len(cacheList) == 0:
+                            try:
+                                # Save the current session using a simpler approach
+                                # Just save the user data directory path for future use
+                                session_info = {
+                                    "user_data_dir": os.path.join(os.getcwd(), 'temp', 'chrome_profile'),
+                                    "timestamp": int(time.time())
+                                }
+                                session_file = f"./temp/cache/session_{int(time.time())}.json"
+                                with open(session_file, 'w') as f:
+                                    json.dump(session_info, f, indent=4)
+                                log.debug(f"Session info saved to {session_file}")
+                            except Exception as e:
+                                log.error(f"Failed to save session: {e}")
+                    
                     break
             log.debug("thread:", self.counter_start)
             i = 0
@@ -150,6 +201,13 @@ class Web(QThread):
             for num in self.Numbers:
                 logtxt = ""
                 try:
+                    # Check if browser is still connected
+                    try:
+                        self.__driver.current_url
+                    except Exception as e:
+                        log.error(f"Browser disconnected: {e}")
+                        break
+                    
                     time.sleep(3)
                     if i == 0:
                         execu = f"""
@@ -178,7 +236,7 @@ class Web(QThread):
                         logtxt = f"Number::{num} => Not Find!"
                         self.nwa.emit(f"{num}")
                     else:
-                        log.debug("find", num)
+                        log.debug(f"find {num}")
                         f += 1
                         self.lcdNumber_wa.emit(f)
                         logtxt = f"Number::{num} => Find."
@@ -219,6 +277,25 @@ class Web(QThread):
                 log.debug("login")
                 logtxt = "Login Success"
                 self.LogBox.emit(logtxt)
+                
+                # Save session if remember is enabled and no cached session exists
+                if self.remember:
+                    cacheList = os.listdir('temp/cache/')
+                    if len(cacheList) == 0:
+                        try:
+                            # Save the current session using a simpler approach
+                            # Just save the user data directory path for future use
+                            session_info = {
+                                "user_data_dir": os.path.join(os.getcwd(), 'temp', 'chrome_profile'),
+                                "timestamp": int(time.time())
+                            }
+                            session_file = f"./temp/cache/session_{int(time.time())}.json"
+                            with open(session_file, 'w') as f:
+                                json.dump(session_info, f, indent=4)
+                            log.debug(f"Session info saved to {session_file}")
+                        except Exception as e:
+                            log.error(f"Failed to save session: {e}")
+                
                 break
         i = 0
         f = 0
@@ -239,8 +316,8 @@ class Web(QThread):
                             """
                     try:
                         self.__driver.execute_script(execu)
-                    except:
-                        log.exception("error")
+                    except Exception as e:
+                        log.exception(f"Error creating link: {e}")
                         logtxt = "ERROR !"
                         break
                 else:
@@ -258,22 +335,89 @@ class Web(QThread):
                     logtxt = f"Number::{num} => No Send!"
                     self.nwa.emit(f"{num}")
                 else:
-                    log.debug("find", num)
+                    log.debug(f"find {num}")
                     time.sleep(2)
-                    textBox = self.__driver.find_element(By.XPATH, '//div[@title="Type a message"]')
+                    # Wait for text input element - try multiple selectors
+                    try:
+                        from selenium.webdriver.support.ui import WebDriverWait
+                        from selenium.webdriver.support import expected_conditions as EC
+                        
+                        # Try multiple possible selectors for the text input
+                        text_input_selectors = [
+                            '//div[@title="Type a message"]',
+                            '//div[@contenteditable="true"][@data-tab="10"]',
+                            '//div[@contenteditable="true"][@data-tab="6"]',
+                            '//div[@role="textbox"]',
+                            '//div[contains(@class, "copyable-text")]//div[@contenteditable="true"]',
+                            '//div[@data-tab="10"]//div[@contenteditable="true"]',
+                            '//div[@data-tab="6"]//div[@contenteditable="true"]'
+                        ]
+                        
+                        textBox = None
+                        for selector in text_input_selectors:
+                            try:
+                                textBox = WebDriverWait(self.__driver, 3).until(
+                                    EC.presence_of_element_located((By.XPATH, selector))
+                                )
+                                log.debug(f"Found text input with selector: {selector}")
+                                break
+                            except:
+                                continue
+                        
+                        if textBox is None:
+                            raise Exception("No text input element found with any selector")
+                            
+                    except Exception as e:
+                        log.error(f"Text input not found for {num}: {e}")
+                        continue
                     time.sleep(1)
-                    self.copyToClipboard(self.text)
-                    textBox.send_keys(Keys.CONTROL, 'v')
+                    log.debug(f"Setting text in textbox: {self.text}")
+                    textBox.clear()
+                    time.sleep(0.5)
+                    # Primary: type the text character by character
+                    try:
+                        textBox.send_keys(self.text)
+                        log.debug("Text set using direct typing")
+                    except Exception as e:
+                        log.debug(f"Direct typing failed: {e}")
+                        # Fallback to clipboard paste
+                        try:
+                            self.copyToClipboard(self.text)
+                            textBox.send_keys(Keys.CONTROL, 'v')
+                            log.debug("Text set using clipboard paste")
+                        except Exception as e2:
+                            log.debug(f"Clipboard method failed: {e2}")
+                            # Fallback to JavaScript
+                            try:
+                                self.__driver.execute_script("arguments[0].textContent = arguments[1];", textBox, self.text)
+                                self.__driver.execute_script("arguments[0].innerText = arguments[1];", textBox, self.text)
+                                log.debug("Text set using JavaScript")
+                            except Exception as e3:
+                                log.debug(f"JavaScript method failed: {e3}")
                     time.sleep(1)
+                    # Verify the text was set correctly
+                    try:
+                        pasted_text = textBox.get_attribute('textContent') or textBox.get_attribute('innerText') or ''
+                        log.debug(f"Text in textbox after setting: '{pasted_text}'")
+                    except:
+                        log.debug("Could not verify text content")
+                    log.debug("Sending message")
+                    # Send the message with a single key press
                     try:
                         textBox.send_keys(Keys.RETURN)
-                    except Exception:
+                        log.debug("Message sent with RETURN key")
+                    except Exception as e:
+                        log.debug(f"RETURN failed, trying ENTER: {e}")
                         textBox.send_keys(Keys.ENTER)
-                    time.sleep(1)
+                        log.debug("Message sent with ENTER key")
+                    
+                    # Wait a bit longer to ensure the message is sent
+                    time.sleep(2)
                     f += 1
                     self.lcdNumber_wa.emit(f)
                     logtxt = f"Number::{num} => Sent."
                     self.wa.emit(f"{num}")
+                    log.debug(f"Message sent successfully to {num}")
                 time.sleep(randint(self.sleepMin, self.sleepMax))
             except:
                 logtxt = f"Error To Number = {num} "
@@ -307,6 +451,25 @@ class Web(QThread):
                 log.debug("login")
                 logtxt = "Login Success"
                 self.LogBox.emit(logtxt)
+                
+                # Save session if remember is enabled and no cached session exists
+                if self.remember:
+                    cacheList = os.listdir('temp/cache/')
+                    if len(cacheList) == 0:
+                        try:
+                            # Save the current session using a simpler approach
+                            # Just save the user data directory path for future use
+                            session_info = {
+                                "user_data_dir": os.path.join(os.getcwd(), 'temp', 'chrome_profile'),
+                                "timestamp": int(time.time())
+                            }
+                            session_file = f"./temp/cache/session_{int(time.time())}.json"
+                            with open(session_file, 'w') as f:
+                                json.dump(session_info, f, indent=4)
+                            log.debug(f"Session info saved to {session_file}")
+                        except Exception as e:
+                            log.error(f"Failed to save session: {e}")
+                
                 break
         i = 0
         f = 0
@@ -345,19 +508,170 @@ class Web(QThread):
                     logtxt = f"Number::{num} => No Send"
                     self.nwa.emit(f"{num}")
                 else:
-                    log.debug("find", num)
+                    log.debug(f"find {num}")
                     time.sleep(2)
-                    self.__driver.find_element(By.XPATH, '//span[@data-icon="attach-menu-plus"]').click()
+                    # Wait for the attachment button to be present before clicking
+                    try:
+                        from selenium.webdriver.support.ui import WebDriverWait
+                        from selenium.webdriver.support import expected_conditions as EC
+                        
+                        # Try multiple possible selectors for the attachment button
+                        attach_selectors = [
+                            '//span[@data-icon="attach-menu-plus"]',
+                            '//span[@data-icon="attach-menu"]',
+                            '//div[@title="Attach"]',
+                            '//div[contains(@aria-label, "Attach")]',
+                            '//div[@role="button"][contains(@aria-label, "Attach")]',
+                            '#main > footer > div.x1n2onr6.xhtitgo.x9f619.x78zum5.x1q0g3np.xuk3077.xjbqb8w.x1wiwyrm.xvc5jky.x11t971q.xquzyny.xnpuxes.copyable-area > div > span > div > div._ak1r > div > div.x100vrsf.x1vqgdyp.x78zum5.x6s0dn4.xpvyfi4 > button > span'
+                        ]
+                        
+                        attach_btn = None
+                        for selector in attach_selectors:
+                            try:
+                                attach_btn = WebDriverWait(self.__driver, 3).until(
+                                    EC.element_to_be_clickable((By.XPATH, selector))
+                                )
+                                log.debug(f"Found attachment button with selector: {selector}")
+                                break
+                            except:
+                                continue
+                        
+                        if attach_btn is None:
+                            raise Exception("No attachment button found with any selector")
+                        
+                        attach_btn.click()
+                    except Exception as e:
+                        log.error(f"Attachment button not found for {num}: {e}")
+                        # Fallback: always try to send text only
+                        fallback_text = self.text if self.text.strip() else "Attachment could not be sent"
+                        log.info(f"Falling back to sending text only for {num}")
+                        # Wait for text input element - try multiple selectors
+                        try:
+                            from selenium.webdriver.support.ui import WebDriverWait
+                            from selenium.webdriver.support import expected_conditions as EC
+                            text_input_selectors = [
+                                '//div[@title="Type a message"]',
+                                '//div[@contenteditable="true"][@data-tab="10"]',
+                                '//div[@contenteditable="true"][@data-tab="6"]',
+                                '//div[@role="textbox"]',
+                                '//div[contains(@class, "copyable-text")]//div[@contenteditable="true"]',
+                                '//div[@data-tab="10"]//div[@contenteditable="true"]',
+                                '//div[@data-tab="6"]//div[@contenteditable="true"]'
+                            ]
+                            textBox = None
+                            for selector in text_input_selectors:
+                                try:
+                                    textBox = WebDriverWait(self.__driver, 3).until(
+                                        EC.presence_of_element_located((By.XPATH, selector))
+                                    )
+                                    log.debug(f"Found text input with selector: {selector}")
+                                    break
+                                except:
+                                    continue
+                            if textBox is None:
+                                raise Exception("No text input element found with any selector")
+                        except Exception as e:
+                            log.error(f"Text input not found for {num}: {e}")
+                            continue
+                        time.sleep(1)
+                        log.debug(f"Setting text in textbox: {fallback_text}")
+                        textBox.clear()
+                        time.sleep(0.5)
+                        try:
+                            self.__driver.execute_script("arguments[0].textContent = arguments[1];", textBox, fallback_text)
+                            self.__driver.execute_script("arguments[0].innerText = arguments[1];", textBox, fallback_text)
+                            log.debug("Text set using JavaScript")
+                        except Exception as e:
+                            log.debug(f"JavaScript method failed: {e}")
+                            try:
+                                self.copyToClipboard(fallback_text)
+                                textBox.send_keys(Keys.CONTROL, 'v')
+                                log.debug("Text set using clipboard paste")
+                            except Exception as e2:
+                                log.debug(f"Clipboard method failed: {e2}")
+                                textBox.send_keys(fallback_text)
+                                log.debug("Text set using direct typing")
+                        time.sleep(1)
+                        try:
+                            pasted_text = textBox.get_attribute('textContent') or textBox.get_attribute('innerText') or ''
+                            log.debug(f"Text in textbox after setting: '{pasted_text}'")
+                        except:
+                            log.debug("Could not verify text content")
+                        log.debug("Sending message")
+                        try:
+                            textBox.send_keys(Keys.RETURN)
+                            log.debug("Message sent with RETURN key")
+                        except Exception as e:
+                            log.debug(f"RETURN failed, trying ENTER: {e}")
+                            textBox.send_keys(Keys.ENTER)
+                            log.debug("Message sent with ENTER key")
+                        time.sleep(2)
+                        f += 1
+                        self.lcdNumber_wa.emit(f)
+                        logtxt = f"Number::{num} => Sent (text only fallback)."
+                        self.wa.emit(f"{num}")
+                        log.debug(f"Message sent successfully to {num} (text only fallback)")
+                        continue
                     time.sleep(2)
-                    attch = self.__driver.find_element(By.XPATH,
-                                                       '//input[@accept="image/*,video/mp4,video/3gpp,video/quicktime"]')
-                    attch.send_keys(self.path)
+                    # Wait for file input element
+                    try:
+                        attch = WebDriverWait(self.__driver, 10).until(
+                            EC.presence_of_element_located((By.XPATH, '//input[@accept="image/*,video/mp4,video/3gpp,video/quicktime"]'))
+                        )
+                        attch.send_keys(self.path)
+                    except Exception as e:
+                        log.error(f"File input not found for {num}: {e}")
+                        continue
                     time.sleep(2)
-                    caption = self.__driver.find_element(
-                        By.XPATH, '//div[@role="textbox"]')
-                    if self.text != '' or self.text != ' ':
-                        self.copyToClipboard(self.text)
-                        caption.send_keys(Keys.CONTROL, 'v')
+                    # Wait for caption textbox
+                    try:
+                        # Try multiple possible selectors for the caption textbox
+                        caption_selectors = [
+                            '//div[@role="textbox"]',
+                            '//div[@contenteditable="true"][@data-tab="10"]',
+                            '//div[@contenteditable="true"][@data-tab="6"]',
+                            '//div[contains(@class, "copyable-text")]//div[@contenteditable="true"]',
+                            '//div[@title="Type a message"]'
+                        ]
+                        
+                        caption = None
+                        for selector in caption_selectors:
+                            try:
+                                caption = WebDriverWait(self.__driver, 3).until(
+                                    EC.presence_of_element_located((By.XPATH, selector))
+                                )
+                                log.debug(f"Found caption textbox with selector: {selector}")
+                                break
+                            except:
+                                continue
+                        
+                        if caption is None:
+                            raise Exception("No caption textbox found with any selector")
+                            
+                    except Exception as e:
+                        log.error(f"Caption textbox not found for {num}: {e}")
+                        continue
+                    if self.text != '' and self.text != ' ':
+                        log.debug(f"Setting caption text: {self.text}")
+                        
+                        # Method 1: Try using JavaScript to set the text directly
+                        try:
+                            self.__driver.execute_script("arguments[0].textContent = arguments[1];", caption, self.text)
+                            self.__driver.execute_script("arguments[0].innerText = arguments[1];", caption, self.text)
+                            log.debug("Caption text set using JavaScript")
+                        except Exception as e:
+                            log.debug(f"JavaScript method failed: {e}")
+                            # Method 2: Fallback to clipboard paste
+                            try:
+                                self.copyToClipboard(self.text)
+                                caption.send_keys(Keys.CONTROL, 'v')
+                                log.debug("Caption text set using clipboard paste")
+                            except Exception as e2:
+                                log.debug(f"Clipboard method failed: {e2}")
+                                # Method 3: Type the text character by character
+                                caption.send_keys(self.text)
+                                log.debug("Caption text set using direct typing")
+                        
                         time.sleep(1)
                     try:
                         caption.send_keys(Keys.RETURN)
@@ -508,7 +822,7 @@ class Web(QThread):
     def __start_session(self, options, profile_name=None, wait_for_login=True):
         if profile_name is None:
             if self.__browser_choice == CHROME:
-                self.__driver = webdriver.Chrome(options=options, service_args=["hide_console", ], service=self.service)
+                self.__driver = webdriver.Chrome(options=options, service=self.service)
                 self.__driver.set_window_position(0, 0)
                 self.__driver.set_window_size(670, 800)
             elif self.__browser_choice == FIREFOX:
@@ -529,7 +843,7 @@ class Web(QThread):
             if self.__browser_choice == CHROME:
                 options.add_argument(
                     'user-data-dir=%s' % os.path.join(self.__browser_user_dir, profile_name))
-                self.__driver = webdriver.Chrome(options=options, service_args=["hide_console", ], service=self.service)
+                self.__driver = webdriver.Chrome(options=options, service=self.service)
             elif self.__browser_choice == FIREFOX:
                 fire_profile = webdriver.FirefoxProfile(
                     os.path.join(self.__browser_user_dir, profile_name))
@@ -666,18 +980,43 @@ class Web(QThread):
 
         if os.path.isfile(profile_file):
             with open(profile_file, 'r') as file:
-                wa_profile_list = json.load(file)
+                session_info = json.load(file)
 
-            verified_wa_profile_list = False
-            for object_store_obj in wa_profile_list:
-                if 'WASecretBundle' in object_store_obj['key']:
-                    verified_wa_profile_list = True
-                    break
-            if verified_wa_profile_list:
-                self.access_by_obj(wa_profile_list)
+            # Check if this is the new format (with user_data_dir)
+            if 'user_data_dir' in session_info:
+                log.debug(f"Loading session from user data directory: {session_info['user_data_dir']}")
+                # Use the saved user data directory
+                option = webdriver.ChromeOptions()
+                option.add_argument("--disable-notifications")
+                option.add_argument("--disable-blink-features=AutomationControlled")
+                option.add_experimental_option("excludeSwitches", ["enable-automation"])
+                option.add_experimental_option('useAutomationExtension', False)
+                option.add_argument(f"--user-data-dir={session_info['user_data_dir']}")
+                
+                try:
+                    self.__driver = webdriver.Chrome(options=option, service=self.service)
+                    self.__driver.set_window_position(0, 0)
+                    self.__driver.set_window_size(1080, 840)
+                    self.__driver.get(self.__URL)
+                    log.debug("Session loaded successfully from user data directory")
+                except Exception as e:
+                    log.error(f"Failed to load session: {e}")
+                    # Fallback to normal browser initialization
+                    self.driverBk()
+                    self.__driver.get(self.__URL)
             else:
-                raise ValueError('There might be multiple profiles stored in this file.'
-                                 ' Make sure you only pass one WaSession file to this method.')
+                # Handle old format (WhatsApp session data)
+                wa_profile_list = session_info
+                verified_wa_profile_list = False
+                for object_store_obj in wa_profile_list:
+                    if 'WASecretBundle' in object_store_obj['key']:
+                        verified_wa_profile_list = True
+                        break
+                if verified_wa_profile_list:
+                    self.access_by_obj(wa_profile_list)
+                else:
+                    raise ValueError('There might be multiple profiles stored in this file.'
+                                     ' Make sure you only pass one WaSession file to this method.')
         else:
             raise FileNotFoundError(
                 'Make sure you pass a valid WaSession file to this method.')

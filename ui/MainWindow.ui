@@ -1598,6 +1598,46 @@ background-color: rgb(0, 0, 0);
         <number>3</number>
        </property>
        <item row="0" column="0">
+        <widget class="QCheckBox" name="chk_remember_login">
+         <property name="font">
+          <font>
+           <family>Arial</family>
+           <pointsize>9</pointsize>
+           <weight>75</weight>
+           <bold>true</bold>
+          </font>
+         </property>
+         <property name="toolTip">
+          <string>Remember WhatsApp Web session to avoid scanning QR code again</string>
+         </property>
+         <property name="styleSheet">
+          <string notr="true">QCheckBox {
+color: rgb(255, 255, 255);
+}
+QCheckBox::indicator {
+width: 16px;
+height: 16px;
+}
+QCheckBox::indicator:unchecked {
+background-color: rgb(255, 255, 255);
+border: 2px solid rgb(0, 0, 0);
+border-radius: 3px;
+}
+QCheckBox::indicator:checked {
+background-color: rgb(0, 255, 0);
+border: 2px solid rgb(0, 0, 0);
+border-radius: 3px;
+}</string>
+         </property>
+         <property name="text">
+          <string>Remember Login</string>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="0">
         <widget class="QPushButton" name="btn_start">
          <property name="minimumSize">
           <size>
@@ -1848,7 +1888,7 @@ color: rgb(0, 0, 255) ;
          </layout>
         </widget>
        </item>
-       <item row="1" column="0">
+       <item row="2" column="0">
         <widget class="QPushButton" name="btn_stop">
          <property name="enabled">
           <bool>false</bool>

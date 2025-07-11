@@ -7,12 +7,13 @@ import xlrd
 import requests
 import time
 import json
+import platform
 from PyQt5.QtGui import QBrush, QTextCursor, QColor, QRegExpValidator, QIcon, QPixmap, QFontDatabase, QFont
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QPoint, QRegExp, QAbstractTableModel
 from PyQt5.QtSql import QSqlDatabase, QSqlQueryModel, QSqlQuery
 from pytz import timezone
 from jdatetime import datetime as dt
-from PyQt5.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBox, QDialog, QDesktopWidget
+from PyQt5.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBox, QDialog, QDesktopWidget, QTextEdit, QPlainTextEdit, QLineEdit
 from wasender import Ui_MainWindow
 import icons_rc
 from browserCtrl import Web
@@ -39,6 +40,14 @@ class Main():
         self.MainWindow = myQMainWindow()
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self.MainWindow)
+        self.enable_copy_paste_for_all_widgets(self.MainWindow)
+        # Enable context menu and clipboard actions for the main message input
+        self.ui.textMSG.setContextMenuPolicy(Qt.DefaultContextMenu)
+        self.ui.textMSG.setReadOnly(False)
+        # Enable context menu and clipboard actions for manual number input if it exists
+        if hasattr(self, 'fi') and hasattr(self.fi, 'manualNumber'):
+            self.fi.manualNumber.setContextMenuPolicy(Qt.DefaultContextMenu)
+            self.fi.manualNumber.setReadOnly(False)
         self.MainWindow.center()
         font_db2 = QFontDatabase()
         font_id2 = font_db2.addApplicationFont(r"fonts\MesloLGS NF.ttf")
@@ -84,6 +93,8 @@ class Main():
         self.ui.btn_acclist.clicked.connect(self.accountsList)
         self.ui.btn_start.clicked.connect(self.StarT)
         self.ui.btn_stop.clicked.connect(self.stop_progress)
+        # Connect the remember login checkbox
+        self.ui.chk_remember_login.toggled.connect(self.toggle_remember_login)
         self.ui.LogBox.setReadOnly(True)
         self.ui.LogBox.setTextInteractionFlags(Qt.NoTextInteraction)  # non-selectable Text in QPlainTextEdit
         self.ui.langs.currentIndexChanged.connect(self.languageSet)
@@ -662,12 +673,18 @@ class Main():
         except:
             pass
 
+    def toggle_remember_login(self, checked):
+        """Toggle the remember login setting"""
+        self.RememberLogin = checked
+        log.debug(f"Remember login set to: {checked}")
+
     def StarT(self):
         try:
             self.userChck()
         except:
             pass
-        self.RememberLogin = True
+        # Use the checkbox value instead of hardcoding to True
+        self.RememberLogin = self.ui.chk_remember_login.isChecked()
 
         log.info("Start")
         # Net = self.ConnectionCheck()
@@ -839,7 +856,11 @@ class Main():
 
     def btn_import(self):
         options = QFileDialog.Options()
-        UserDesk = os.path.join(os.path.join(os.environ['USERPROFILE']), 'Desktop')
+        # Cross-platform way to get user's Desktop
+        if platform.system().lower() == 'windows':
+            UserDesk = os.path.join(os.environ.get('USERPROFILE', ''), 'Desktop')
+        else:
+            UserDesk = os.path.join(os.environ.get('HOME', ''), 'Desktop')
         num_path, _ = QFileDialog.getOpenFileName(caption="", directory=UserDesk,
                                                   filter="Excel Files (*.xlsx | *.xls | *.csv)", options=options)
         try:
@@ -925,7 +946,11 @@ class Main():
 
     def selectIMG(self):
         options = QFileDialog.Options()
-        UserDesk = os.path.join(os.path.join(os.environ['USERPROFILE']), 'Desktop')
+        # Cross-platform way to get user's home directory
+        if platform.system().lower() == 'windows':
+            UserDesk = os.path.join(os.environ.get('USERPROFILE', ''), 'Desktop')
+        else:
+            UserDesk = os.path.join(os.environ.get('HOME', ''), 'Desktop')
         img_path, _ = QFileDialog.getOpenFileName(caption="", directory=UserDesk,
                                                   filter="Image Files (*.jpg | *.jpeg | *.png)", options=options)
         self.p = img_path
@@ -939,6 +964,11 @@ class Main():
                 self.ui.imgName.setText(imgName)
         except:
             pass
+
+    def enable_copy_paste_for_all_widgets(self, widget):
+        for child in widget.findChildren((QTextEdit, QPlainTextEdit, QLineEdit)):
+            child.setContextMenuPolicy(Qt.DefaultContextMenu)
+            child.setReadOnly(False)  # Only if you want them editable
 
     def ConnectionCheck(self, url='https://www.whatsapp.com/', timeout=5):
         try:

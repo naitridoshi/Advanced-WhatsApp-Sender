@@ -88,6 +88,9 @@ def add_coloring_to_emit_ansi(fn):
             color = '\x1b[35m'  # pink
         else:
             color = '\x1b[0m'  # normal
+        # Convert message to string if it's not already
+        if not isinstance(args[1].msg, str):
+            args[1].msg = str(args[1].msg)
         args[1].msg = color + args[1].msg + '\x1b[0m'  # normal
         return fn(*args)
     return new
